@@ -1,0 +1,8 @@
+# Line endings: let Git classify text; VS project files stay CRLF
+* text=auto
+
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf

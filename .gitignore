@@ -1,0 +1,32 @@
+# Visual Studio and build outputs
+.vs/
+x64/
+[Bb]in/
+[Oo]bj/
+Debug/
+Release/
+*.VC.db
+*.VC.opendb
+
+packages/
+
+# WebView2 / Edge profile data (deep paths; do not version)
+pomoshnik_data/
+pomoshnik_edge_profile/
+EBWebView/
+
+# Local temp/binary drops (llama builds, extracts, etc.)
+_tmp_*/
+
+# Nested repo without commits blocks "git add ." — remove this line after Q has a real commit
+Q/
+
+# Large binaries (GitHub rejects files > 100 MB; keep these local or use Releases / Git LFS)
+*.gguf
+nuget.exe
+run/*.dll
+run/models/
+
+# Per-user Visual Studio files
+*.user
+*.suo
