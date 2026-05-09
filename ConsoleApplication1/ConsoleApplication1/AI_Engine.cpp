@@ -3,12 +3,20 @@
 #include "include/llama.h"
 
 #include <algorithm>
+#include <cwctype>
 #include <cstdint>
+#include <cerrno>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <thread>
 #include <iostream>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#include <windows.h>
+#include <shlobj.h>
 
 namespace {
 
@@ -89,10 +97,201 @@ bool decodePromptInChunks(llama_context* ctx, std::vector<llama_token>& tokens) 
     return true;
 }
 
+static int GpuLayersPreference() {
+    // "0" — только RAM/CPU (часто быстрее и стабильнее старт без драйверов NVIDIA).
+    // Большее число — вынести слои на GPU (см. документацию llama.cpp).
+    constexpr int kDefault = 0;
+    std::string env;
+#if defined(_MSC_VER)
+    char* buf = nullptr;
+    size_t buflen = 0;
+    const errno_t e = _dupenv_s(&buf, &buflen, "POMOSHNIK_GPU_LAYERS");
+    if (e != 0 || !buf) {
+        std::free(buf);
+        return kDefault;
+    }
+    env.assign(buf);
+    std::free(buf);
+#else
+    const char* p = std::getenv("POMOSHNIK_GPU_LAYERS");
+    if (p && p[0]) {
+        env.assign(p);
+    }
+#endif
+    if (env.empty()) {
+        return kDefault;
+    }
+    const long v = std::strtol(env.c_str(), nullptr, 10);
+    if (v >= 0 && v <= 100000L) {
+        return static_cast<int>(v);
+    }
+    return kDefault;
+}
+
+static int ThreadBudget() {
+    const unsigned n = std::thread::hardware_concurrency();
+    if (n == 0 || n > 64) {
+        return 8;
+    }
+    return static_cast<int>(n);
+}
+
+static std::string WideToUtf8(const std::wstring& w) {
+    if (w.empty()) {
+        return {};
+    }
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    if (n <= 0) {
+        return {};
+    }
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+static std::wstring Utf8ToWide(const std::string& u8) {
+    if (u8.empty()) {
+        return {};
+    }
+    const int n = MultiByteToWideChar(CP_UTF8, 0, u8.c_str(), (int)u8.size(), nullptr, 0);
+    if (n <= 0) {
+        return {};
+    }
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, u8.c_str(), (int)u8.size(), w.data(), n);
+    return w;
+}
+
+static bool IsGgufFile(const std::filesystem::path& path) {
+    std::wstring ext = path.extension().wstring();
+    for (auto& ch : ext) {
+        ch = static_cast<wchar_t>(std::towlower(static_cast<wint_t>(ch)));
+    }
+    return ext == L".gguf";
+}
+
+static std::filesystem::path FirstGgufInDir(const std::filesystem::path& dir) {
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec) || ec) {
+        return {};
+    }
+    std::filesystem::path best;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        if (!IsGgufFile(entry.path())) {
+            continue;
+        }
+        const auto name = entry.path().filename().wstring();
+        if (name.find(L"llama-3-8b") != std::wstring::npos || name.find(L"llama") != std::wstring::npos) {
+            return entry.path();
+        }
+        if (best.empty()) {
+            best = entry.path();
+        }
+    }
+    return best;
+}
+
 } // namespace
 
+void AIEngine::refreshModelPathFromDiskLocked() {
+    wchar_t exePathW[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
+    const std::filesystem::path exeDir = std::filesystem::path(exePathW).parent_path();
+    const std::filesystem::path exeModels = exeDir / L"models";
+    std::filesystem::path cwdModels;
+    {
+        std::error_code ec;
+        cwdModels = std::filesystem::current_path(ec) / L"models";
+    }
+
+    std::filesystem::path found;
+    const std::filesystem::path tryDirs[] = {exeModels, cwdModels};
+    auto assignFound = [this](const std::filesystem::path& fp) {
+        std::error_code ec;
+        std::filesystem::path abs = std::filesystem::weakly_canonical(fp, ec);
+        if (ec || abs.empty()) {
+            abs = fp;
+        }
+        m_modelPathW = abs.wstring();
+        m_modelPath = WideToUtf8(m_modelPathW);
+    };
+
+    for (const auto& dir : tryDirs) {
+        found = FirstGgufInDir(dir);
+        if (!found.empty()) {
+            assignFound(found);
+            return;
+        }
+    }
+
+    wchar_t docs[MAX_PATH] = {};
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_MYDOCUMENTS, nullptr, SHGFP_TYPE_CURRENT, docs))) {
+        found = FirstGgufInDir(std::filesystem::path(docs) / L"Pomoshnik" / L"models");
+        if (!found.empty()) {
+            assignFound(found);
+            return;
+        }
+    }
+
+    wchar_t profileDir[32768] = {};
+    const DWORD np = GetEnvironmentVariableW(L"USERPROFILE", profileDir, static_cast<DWORD>(std::size(profileDir)));
+    if (np > 0 && np < std::size(profileDir)) {
+        const std::filesystem::path prof(profileDir);
+        const std::filesystem::path downloadCandidates[] = {
+            prof / L"Downloads" / L"Pomoshnik" / L"models",
+            prof / L"Загрузки" / L"Pomoshnik" / L"models",
+        };
+        for (const auto& d : downloadCandidates) {
+            found = FirstGgufInDir(d);
+            if (!found.empty()) {
+                assignFound(found);
+                return;
+            }
+        }
+    }
+
+#if defined(_MSC_VER)
+    wchar_t* ev = nullptr;
+    size_t evLen = 0;
+    if (_wdupenv_s(&ev, &evLen, L"POMOSHNIK_MODEL_DIR") == 0 && ev && ev[0]) {
+        found = FirstGgufInDir(std::filesystem::path(ev));
+        std::free(ev);
+        if (!found.empty()) {
+            assignFound(found);
+            return;
+        }
+    } else {
+        std::free(ev);
+    }
+#endif
+
+    // Путь из конструктора: проверяем только через wide (string на MSVC — не UTF-8 для path)
+    if (!m_modelPathW.empty()) {
+        std::error_code ec;
+        if (!std::filesystem::exists(std::filesystem::path(m_modelPathW), ec) || ec) {
+            m_modelPathW.clear();
+            m_modelPath.clear();
+        }
+        return;
+    }
+    if (!m_modelPath.empty()) {
+        m_modelPathW = Utf8ToWide(m_modelPath);
+        std::error_code ec;
+        if (m_modelPathW.empty() || !std::filesystem::exists(std::filesystem::path(m_modelPathW), ec) || ec) {
+            m_modelPath.clear();
+            m_modelPathW.clear();
+        }
+    }
+}
+
 AIEngine::AIEngine(const std::string& modelPath) : m_modelPath(modelPath) {
-    retainLlamaBackend();
+    if (!modelPath.empty()) {
+        m_modelPathW = Utf8ToWide(modelPath);
+    }
+    // llama_backend_init перенесён в worker — первый запуск окна не ждёт CUDA/CPU backend.
 
     // Russian persona: feminine-only, human chat tone (not «assistant brochure»).
     m_history.emplace_back(
@@ -104,56 +303,173 @@ AIEngine::AIEngine(const std::string& modelPath) : m_modelPath(modelPath) {
         "Не объясняй, что ты «она» — просто так и говори. Ответ обычно 1–4 коротких предложения, если не просят развернуть. "
         "Если про ПК — конкретные шаги или команда; без морали и без лишних вступлений.");
 
+    // GGUF загрузку откладываем до preloadModel()/первого generateResponse — окно приложения показывается без долгого старта.
+}
+
+void AIEngine::preloadModel() {
+    startBackgroundModelLoad();
+    waitForBackgroundLoadDone();
+}
+
+void AIEngine::startBackgroundModelLoad() {
+    std::unique_lock<std::mutex> lk(m_loadMutex);
+    if (m_bgLoadState == BgLoadState::Running) {
+        return;
+    }
+    if (m_loadThread.joinable()) {
+        lk.unlock();
+        m_loadThread.join();
+        lk.lock();
+    }
+    if (m_ready || m_loadFailedPermanent) {
+        if (m_loadThread.joinable()) {
+            lk.unlock();
+            m_loadThread.join();
+            lk.lock();
+        }
+        m_bgLoadState = BgLoadState::Finished;
+        return;
+    }
+    // Прошлый запуск закончился без модели — можно снова искать .gguf на диске.
+    if (m_bgLoadState == BgLoadState::Finished) {
+        m_bgLoadState = BgLoadState::NotStarted;
+    }
+    if (m_bgLoadState != BgLoadState::NotStarted) {
+        return;
+    }
+
+    refreshModelPathFromDiskLocked();
+
+    std::error_code fec;
+    const std::filesystem::path p = m_modelPathW.empty() ? std::filesystem::path{} : std::filesystem::path(m_modelPathW);
+    if (m_modelPathW.empty() || m_modelPath.empty() || !std::filesystem::exists(p, fec) || fec) {
+        m_bgLoadState = BgLoadState::Finished;
+        m_loadCv.notify_all();
+        return;
+    }
+
+    m_bgLoadState = BgLoadState::Running;
+    lk.unlock();
+    m_loadThread = std::thread([this]() { backgroundLoadWorker(); });
+}
+
+void AIEngine::waitForBackgroundLoadDone() {
+    std::unique_lock<std::mutex> lk(m_loadMutex);
+    if (m_bgLoadState == BgLoadState::NotStarted) {
+        lk.unlock();
+        startBackgroundModelLoad();
+        lk.lock();
+    }
+    m_loadCv.wait(lk, [&] { return m_bgLoadState == BgLoadState::Finished; });
+}
+
+void AIEngine::backgroundLoadWorker() {
+    retainLlamaBackend();
+
+    std::string pathCopy;
+    {
+        std::lock_guard<std::mutex> lk(m_loadMutex);
+        pathCopy = m_modelPath;
+        if (pathCopy.empty() && !m_modelPathW.empty()) {
+            pathCopy = WideToUtf8(m_modelPathW);
+        }
+    }
+
+    llama_model* model = nullptr;
+    llama_context* ctx = nullptr;
+    llama_sampler* sampler = nullptr;
+    const llama_vocab* vocab = nullptr;
+
+    auto failPermanent = [&](const char* msg) {
+        if (msg) {
+            std::cout << msg << pathCopy << std::endl;
+        }
+        std::lock_guard<std::mutex> lk(m_loadMutex);
+        if (model) {
+            llama_model_free(model);
+            model = nullptr;
+        }
+        if (ctx) {
+            llama_free(ctx);
+            ctx = nullptr;
+        }
+        if (sampler) {
+            llama_sampler_free(sampler);
+            sampler = nullptr;
+        }
+        m_loadFailedPermanent = true;
+        m_bgLoadState = BgLoadState::Finished;
+        m_loadCv.notify_all();
+    };
+
+    if (pathCopy.empty()) {
+        std::lock_guard<std::mutex> lk(m_loadMutex);
+        m_bgLoadState = BgLoadState::Finished;
+        m_loadCv.notify_all();
+        return;
+    }
+
     llama_model_params modelParams = llama_model_default_params();
-    // Reduce RAM: map model from disk; keep it unlocked by default.
     modelParams.use_mmap = true;
     modelParams.use_mlock = false;
-
-    // 1660 SUPER has ~6 GB VRAM; offload a moderate amount by default.
-    // More layers => more VRAM, usually less RAM pressure.
-    modelParams.n_gpu_layers = 28;
+    modelParams.n_gpu_layers = GpuLayersPreference();
     modelParams.main_gpu = 0;
 
-    m_model = llama_model_load_from_file(m_modelPath.c_str(), modelParams);
-    if (!m_model) {
-        std::cout << "Ne udaetsya zagruzit model: " << modelPath << std::endl;
+    model = llama_model_load_from_file(pathCopy.c_str(), modelParams);
+    if (!model) {
+        failPermanent("Ne udaetsya zagruzit model: ");
         return;
     }
 
     llama_context_params ctxParams = llama_context_default_params();
-    // Enough room for Llama-3 chat template + Russian system message + a few turns.
-    // (Previously n_batch=128 forced us to truncate the prompt mid-sequence → garbage output.)
     ctxParams.n_ctx = 2048;
     ctxParams.n_batch = 512;
     ctxParams.n_ubatch = 512;
-    // KV на CPU для стабильности при повторных генерациях.
     ctxParams.offload_kqv = false;
-    ctxParams.n_threads = 8;
-    ctxParams.n_threads_batch = 8;
+    const int nt = ThreadBudget();
+    ctxParams.n_threads = nt;
+    ctxParams.n_threads_batch = nt;
 
-    m_ctx = llama_init_from_model(m_model, ctxParams);
-    if (!m_ctx) {
-        std::cout << "Ne udaetsya sozdat context dlya modeli." << std::endl;
-        llama_model_free(m_model);
-        m_model = nullptr;
+    ctx = llama_init_from_model(model, ctxParams);
+    if (!ctx) {
+        failPermanent("Ne udaetsya sozdat context dlya modeli: ");
         return;
     }
 
-    m_vocab = llama_model_get_vocab(m_model);
+    vocab = llama_model_get_vocab(model);
 
     llama_sampler_chain_params samplerParams = llama_sampler_chain_default_params();
-    m_sampler = llama_sampler_chain_init(samplerParams);
-    llama_sampler_chain_add(m_sampler, llama_sampler_init_top_k(40));
-    llama_sampler_chain_add(m_sampler, llama_sampler_init_top_p(0.90f, 1));
-    // Slightly warmer sampling for more natural spoken Russian.
-    llama_sampler_chain_add(m_sampler, llama_sampler_init_temp(0.82f));
-    llama_sampler_chain_add(m_sampler, llama_sampler_init_dist(12345));
+    sampler = llama_sampler_chain_init(samplerParams);
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.90f, 1));
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.82f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(12345));
 
-    m_ready = true;
-    std::cout << "Model zagruzhena iz: " << modelPath << std::endl;
+    {
+        std::lock_guard<std::mutex> lk(m_loadMutex);
+        if (m_loadFailedPermanent) {
+            llama_sampler_free(sampler);
+            llama_free(ctx);
+            llama_model_free(model);
+            m_bgLoadState = BgLoadState::Finished;
+            m_loadCv.notify_all();
+            return;
+        }
+        m_model = model;
+        m_ctx = ctx;
+        m_sampler = sampler;
+        m_vocab = vocab;
+        m_ready = true;
+        m_bgLoadState = BgLoadState::Finished;
+    }
+    m_loadCv.notify_all();
+    std::cout << "Model zagruzhena iz: " << pathCopy << std::endl;
 }
 
 AIEngine::~AIEngine() {
+    if (m_loadThread.joinable()) {
+        m_loadThread.join();
+    }
     if (m_sampler) {
         llama_sampler_free(m_sampler);
         m_sampler = nullptr;
@@ -324,7 +640,6 @@ void AIEngine::loadHistoryTurns(const std::vector<std::pair<std::string, std::st
 }
 
 std::string AIEngine::generateResponse(const std::string& input, const std::string& tone) {
-    std::lock_guard<std::mutex> lock(g_generateMutex);
     const bool wantsClose =
         input.find("zakroi") != std::string::npos ||
         input.find("kill") != std::string::npos ||
@@ -347,8 +662,19 @@ std::string AIEngine::generateResponse(const std::string& input, const std::stri
         return "COMMAND_OPEN_NOTEPAD";
     }
 
+    startBackgroundModelLoad();
+    waitForBackgroundLoadDone();
+
+    std::lock_guard<std::mutex> lock(g_generateMutex);
+
+    if (m_loadFailedPermanent) {
+        return "Не удалось загрузить модель (.gguf). Проверь файл или видеопамять и перезапусти приложение.";
+    }
     if (!m_ready || !m_ctx || !m_model || !m_sampler || !m_vocab) {
-        return "Model ne gotova. Prover put k GGUF i perezapusti programmu.";
+        return "Модель не найдена. Положи файл .gguf в папку models рядом с Pomoshnik.exe "
+               "(после установки это обычно %LOCALAPPDATA%\\Programs\\Pomoshnik\\models) "
+               "или в Документы\\Pomoshnik\\models, затем отправь сообщение снова. "
+               "Пока без модели работают закладки, напоминания и команды.";
     }
 
     SystemToneGuard toneGuard(m_history, tone);

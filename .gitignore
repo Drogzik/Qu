@@ -30,3 +30,6 @@ run/models/
 # Per-user Visual Studio files
 *.user
 *.suo
+
+# Установщик после Release ^| x64 (MSBuild + Inno Setup)
+Installer/Output/
