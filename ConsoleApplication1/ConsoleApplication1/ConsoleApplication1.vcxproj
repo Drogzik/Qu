@@ -148,13 +148,27 @@
     <ClCompile Include="AI_Engine.cpp" />
     <ClCompile Include="AppWindow.cpp" />
     <ClCompile Include="ConsoleApplication1.cpp" />
+    <ClCompile Include="HostBridge.cpp" />
     <ClCompile Include="SystemControl.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AI_Engine.h" />
     <ClInclude Include="AppWindow.h" />
+    <ClInclude Include="HostBridge.h" />
     <ClInclude Include="SystemControl.h" />
   </ItemGroup>
+  <Target Name="CopyShellUi" AfterTargets="Build">
+    <ItemGroup>
+      <UiShellFiles Include="$(ProjectDir)ui\**\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(UiShellFiles)"
+          DestinationFiles="@(UiShellFiles->'$(OutDir)ui\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(UiShellFiles)"
+          DestinationFiles="@(UiShellFiles->'$(ProjectDir)..\..\run\ui\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(ProjectDir)..\..\run')" />
+  </Target>
   <Target Name="CopyBuiltExeToRun" AfterTargets="Build" Condition="Exists('$(ProjectDir)..\..\run')">
     <!-- If Pomoshnik.exe is running, the file is locked and Copy fails (MSB3026/MSB3027). -->
     <Exec Command="taskkill /F /IM Pomoshnik.exe /T &gt;nul 2&gt;&amp;1" IgnoreExitCode="true" />

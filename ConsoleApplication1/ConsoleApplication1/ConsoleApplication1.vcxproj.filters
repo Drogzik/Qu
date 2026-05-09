@@ -18,6 +18,9 @@
     <ClCompile Include="ConsoleApplication1.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="HostBridge.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
     <ClCompile Include="SystemControl.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
@@ -30,6 +33,9 @@
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
     <ClInclude Include="AI_Engine.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
+    <ClInclude Include="HostBridge.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>

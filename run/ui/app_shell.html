@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Помошник</title>
+  <style>
+    :root{
+      --bg:#080a12; --bg2:#0f1424; --card:#131a2b; --line:#2a3554; --text:#ecf0ff; --muted:#9ea7c5;
+      --acc:#7b6cff; --acc2:#4fd3c4; --danger:#ff6e8a;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font:15px/1.45 "Segoe UI",system-ui,sans-serif;color:var(--text);background:radial-gradient(1200px 600px at 100% -10%,#1a2040 0,#0b0f1d 45%,#080a12 100%)}
+    button,input,textarea,select{font:inherit}
+    #app{display:grid;grid-template-columns:260px 1fr;height:100%}
+    .side{padding:18px 14px;border-right:1px solid #24304d;background:linear-gradient(180deg,#11182b,#0d1322)}
+    .logo{font-size:20px;font-weight:800;margin:4px 8px 14px}
+    .logo span{opacity:.75;font-size:12px;display:block;font-weight:500}
+    .nav-btn{width:100%;text-align:left;padding:11px 12px;margin:5px 0;border:1px solid transparent;background:transparent;color:var(--text);border-radius:10px;cursor:pointer}
+    .nav-btn:hover{background:#17203a}
+    .nav-btn.active{background:linear-gradient(135deg,rgba(123,108,255,.35),rgba(79,211,196,.25));border-color:#38456f}
+    .main{display:flex;flex-direction:column;min-width:0}
+    .top{display:flex;gap:10px;align-items:center;padding:14px 18px;border-bottom:1px solid #24304d;background:rgba(11,16,31,.75)}
+    .cmd{background:#0f1528;border:1px solid #2d3a5f;color:#b9c4e6;padding:9px 12px;border-radius:10px;min-width:320px;cursor:pointer}
+    .top .badge{margin-left:auto;padding:6px 10px;border-radius:999px;background:#15203b;color:#a9b6db;border:1px solid #31416d;font-size:12px}
+    .view{padding:16px 18px;overflow:auto}
+    .hidden{display:none}
+
+    .chat{display:grid;grid-template-columns:240px 1fr;gap:12px;min-height:calc(100vh - 100px)}
+    .panel{background:rgba(19,26,43,.88);border:1px solid #2b385a;border-radius:14px;box-shadow:0 10px 35px rgba(0,0,0,.28)}
+    .sessions{padding:10px}
+    .new-chat{width:100%;padding:10px;border-radius:10px;border:0;background:linear-gradient(135deg,var(--acc),#9675ff);color:#fff;font-weight:700;cursor:pointer}
+    .s-list{margin-top:10px;display:grid;gap:6px;max-height:70vh;overflow:auto}
+    .s-item{padding:10px;border:1px solid #2c3b60;border-radius:9px;color:#d6def8;cursor:pointer;background:#0f1629}
+    .s-item.active{background:#1a2441}
+    .chat-box{display:flex;flex-direction:column}
+    .msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+    .msg{max-width:78%;padding:10px 12px;border-radius:12px;white-space:pre-wrap}
+    .msg.user{align-self:flex-end;background:linear-gradient(135deg,rgba(123,108,255,.55),rgba(123,108,255,.22))}
+    .msg.assistant{align-self:flex-start;background:#1a2238;border:1px solid #324164}
+    .typing{padding:0 14px 8px;color:#9fb1db;font-size:12px;min-height:18px}
+    .composer{border-top:1px solid #2b385a;padding:12px}
+    .tones{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+    .tone{padding:5px 10px;border-radius:999px;border:1px solid #31406a;background:#0f1528;color:#d5ddf8;cursor:pointer;font-size:12px}
+    .tone.on{border-color:#7388d8;background:#172245}
+    .row{display:flex;gap:8px}
+    textarea{flex:1;min-height:48px;max-height:120px;resize:vertical;background:#0f1528;color:var(--text);border:1px solid #31406a;border-radius:10px;padding:10px}
+    .send{width:92px;border:0;border-radius:10px;background:linear-gradient(135deg,var(--acc),#9675ff);color:#fff;font-weight:700;cursor:pointer}
+
+    .toolbar{display:flex;gap:8px;margin-bottom:12px}
+    .toolbar input,.toolbar select{background:#0f1528;color:var(--text);border:1px solid #31406a;border-radius:10px;padding:9px 10px}
+    .toolbar input{flex:1}
+    .btn{border:0;border-radius:10px;padding:9px 12px;background:linear-gradient(135deg,var(--acc),#9675ff);color:#fff;cursor:pointer}
+    .list{display:grid;gap:8px}
+    .item{background:rgba(19,26,43,.88);border:1px solid #2b385a;border-radius:12px;padding:10px 12px}
+    .item .title{font-weight:700}
+    .meta{color:var(--muted);font-size:12px}
+    .danger{background:linear-gradient(135deg,var(--danger),#ff4f70)}
+    .notes{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+    .note{background:rgba(19,26,43,.88);border:1px solid #2b385a;border-radius:12px;padding:10px}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+    .card{background:rgba(19,26,43,.88);border:1px solid #2b385a;border-radius:12px;padding:12px}
+    .big{font-size:28px;font-weight:800;background:linear-gradient(135deg,#7bd9ff,#8ef5cf);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;justify-content:center;align-items:flex-start;padding-top:10vh}
+    .palette{width:min(620px,94%);background:#10172b;border:1px solid #31406a;border-radius:12px;overflow:hidden}
+    .palette input{width:100%;padding:12px;border:0;border-bottom:1px solid #31406a;background:#0f1528;color:var(--text)}
+    .palette li{padding:10px 12px;border-bottom:1px solid #273456;cursor:pointer}
+    .palette li:hover{background:#1a2441}
+  </style>
+</head>
+<body>
+<div id="app">
+  <aside class="side">
+    <div class="logo">Q Помошник<span>Dark Productivity Shell</span></div>
+    <button class="nav-btn active" data-v="chat">ИИ-чат</button>
+    <button class="nav-btn" data-v="bookmarks">Закладки</button>
+    <button class="nav-btn" data-v="reminders">Напоминания</button>
+    <button class="nav-btn" data-v="settings">Настройки</button>
+    <button class="nav-btn" data-v="profile">Профиль</button>
+  </aside>
+  <main class="main">
+    <div class="top">
+      <button class="cmd" id="openCmd">Быстрый поиск (Ctrl+K)</button>
+      <div class="badge">online</div>
+    </div>    <section class="view" id="v-chat">
+      <div class="chat">
+        <div class="panel sessions">
+          <button class="new-chat" id="newChat">+ Новый чат</button>
+          <div class="s-list" id="sessions"></div>
+        </div>
+        <div class="panel chat-box">
+          <div class="msgs" id="msgs"></div>
+          <div class="typing" id="typing"></div>
+          <div class="composer">
+            <div class="tones">
+              <button class="tone on" data-tone="friendly">Дружелюбный</button>
+              <button class="tone" data-tone="formal">Формальный</button>
+              <button class="tone" data-tone="brief">Краткий</button>
+            </div>
+            <div class="row">
+              <textarea id="chatInput" placeholder="Напишите сообщение..."></textarea>
+              <button class="send" id="sendBtn">Отпр.</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="view hidden" id="v-bookmarks">
+      <div class="toolbar"><input id="bmTitle" placeholder="Текст закладки"><button class="btn" id="addBm">Добавить</button></div>
+      <div class="list" id="bookmarks"></div>
+    </section>
+    <section class="view hidden" id="v-reminders">
+      <div class="toolbar"><input id="remText" placeholder="Текст напоминания"><button class="btn" id="addRem">Создать</button></div>
+      <div class="list" id="reminders"></div>
+    </section>
+    <section class="view hidden" id="v-settings">
+      <div class="card">
+        <div class="title">Параметры общения</div>
+        <div class="meta" style="margin-top:4px">Выбери стиль ответа ассистента по умолчанию.</div>
+        <div class="toolbar" style="margin-top:10px;margin-bottom:0">
+          <select id="setTemper">
+            <option value="friendly">Дружелюбный</option>
+            <option value="formal">Формальный</option>
+            <option value="brief">Краткий</option>
+          </select>
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="title">Основной браузер</div>
+        <div class="meta" style="margin-top:4px">Команда "открой браузер" будет запускать выбранный вариант.</div>
+        <div class="toolbar" style="margin-top:10px;margin-bottom:0">
+          <select id="setBrowser">
+            <option value="edge">Microsoft Edge</option>
+            <option value="chrome">Google Chrome</option>
+            <option value="firefox">Mozilla Firefox</option>
+            <option value="yandex">Yandex Browser</option>
+            <option value="opera">Opera</option>
+          </select>
+          <button class="btn" id="saveSettings">Сохранить</button>
+        </div>
+      </div>
+    </section>
+    <section class="view hidden" id="v-profile">
+      <div class="stats">
+        <div class="card"><div class="big" id="pReq">0</div><div class="meta">Запросов</div></div>
+        <div class="card"><div class="big" id="pChats">0</div><div class="meta">Чатов</div></div>
+        <div class="card"><div class="big" id="pBms">0</div><div class="meta">Закладок</div></div>
+        <div class="card"><div class="big" id="pRems">0</div><div class="meta">Напоминаний</div></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        Пользователь: <b id="pUserName">Владелец устройства</b><br>
+        Первый запуск: <b id="pDate">-</b><br>
+        Любимый темперамент: <b id="pTone">Дружелюбный</b>
+      </div>
+      <div class="card" style="margin-top:10px">
+        Об ИИ: Помощник умеет вести диалог, помнить историю чата, создавать задачи, заметки, закладки и напоминания.
+      </div>
+    </section>
+  </main>
+</div>
+<div id="paletteRoot" class="hidden"></div><script>
+(() => {
+  const q = (s) => document.querySelector(s);
+  const qa = (s) => Array.from(document.querySelectorAll(s));
+  const day = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const store = () => JSON.parse(localStorage.getItem("pom_shell") || "{}");
+  const save = (v) => {
+    // Important: avoid overwriting other modules (bookmarks/reminders/settings) saved by fallback code.
+    const cur = store();
+    v.bookmarks = cur.bookmarks || v.bookmarks || [];
+    v.reminders = cur.reminders || v.reminders || [];
+    v.settings = cur.settings || v.settings || { temperament: "friendly", browser: "edge" };
+    localStorage.setItem("pom_shell", JSON.stringify(v));
+  };
+  const st = Object.assign(
+    { sessions: {}, cur: "", tasks: [], notes: [], bookmarks: [], reminders: [], settings: { temperament: "friendly", browser: "edge" }, stats: { requests: 0, first: "", days: {} } },
+    store()
+  );
+  if (!st.stats.first) st.stats.first = new Date().toISOString().slice(0, 10);
+  if (!st.cur) {
+    st.cur = "s" + Date.now();
+    st.sessions[st.cur] = { title: "Диалог", turns: [] };
+  }
+  save(st);
+
+  const post = (o) => {
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage(JSON.stringify(o));
+    }
+  };
+  const tone = () => {
+    const el = q(".tone.on");
+    return el ? el.dataset.tone : "friendly";
+  };
+  const toneTitle = (key) => key === "formal" ? "Формальный" : (key === "brief" ? "Краткий" : "Дружелюбный");
+
+  function renderSessions() {
+    const b = q("#sessions");
+    b.innerHTML = "";
+    Object.keys(st.sessions).forEach((id) => {
+      const s = st.sessions[id];
+      const d = document.createElement("div");
+      d.className = "s-item" + (id === st.cur ? " active" : "");
+      d.textContent = s.title || "Диалог";
+      d.onclick = () => {
+        st.cur = id;
+        save(st);
+        renderSessions();
+        renderMsgs();
+        sync();
+      };
+      b.appendChild(d);
+    });
+  }
+
+  function renderMsgs() {
+    const b = q("#msgs");
+    b.innerHTML = "";
+    ((st.sessions[st.cur] && st.sessions[st.cur].turns) || []).forEach((t) => {
+      const d = document.createElement("div");
+      d.className = "msg " + (t.role === "user" ? "user" : "assistant");
+      d.textContent = t.text;
+      b.appendChild(d);
+    });
+    b.scrollTop = b.scrollHeight;
+  }
+
+  function sync() {
+    const turns = ((st.sessions[st.cur] && st.sessions[st.cur].turns) || []).filter((t) => t.role === "user" || t.role === "assistant");
+    post({ type: "syncSession", turns });
+  }
+  function addUser(text) {
+    const s = st.sessions[st.cur];
+    s.turns.push({ role: "user", text });
+    if (!s.title || s.title === "Диалог") s.title = text.slice(0, 26);
+    st.stats.requests++;
+    st.stats.days[day()] = (st.stats.days[day()] || 0) + 1;
+    save(st);
+    renderSessions();
+    renderMsgs();
+    renderProfile();
+  }
+
+  function addAi(text) {
+    st.sessions[st.cur].turns.push({ role: "assistant", text });
+    save(st);
+    renderMsgs();
+  }
+
+  q("#newChat").onclick = () => {
+    post({ type: "reset" });
+    st.cur = "s" + Date.now();
+    st.sessions[st.cur] = { title: "Диалог", turns: [] };
+    save(st);
+    renderSessions();
+    renderMsgs();
+  };
+
+  q("#sendBtn").onclick = () => {
+    const t = q("#chatInput").value.trim();
+    if (!t) return;
+    q("#chatInput").value = "";
+    addUser(t);
+    post({ type: "chat", text: t, tone: tone() });
+  };
+
+  q("#chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      q("#sendBtn").click();
+    }
+  });
+
+  qa(".tone").forEach((x) => {
+    x.onclick = () => {
+      qa(".tone").forEach((y) => y.classList.remove("on"));
+      x.classList.add("on");
+      st.settings.temperament = x.dataset.tone || "friendly";
+      save(st);
+      renderProfile();
+    };
+  });
+
+  window.addEventListener("message", (e) => {
+    let d = e.data;
+    if (typeof d !== "string") return;
+    try { d = JSON.parse(d); } catch (err) { return; }
+    if (d.type === "typing") q("#typing").textContent = d.value ? "Q печатает..." : "";
+    if (d.type === "reply") {
+      q("#typing").textContent = "";
+      addAi(d.text || "");
+    }
+  });
+  function renderProfile() {
+    q("#pReq").textContent = st.stats.requests;
+    q("#pChats").textContent = Object.keys(st.sessions).length;
+    q("#pBms").textContent = (store().bookmarks || []).length;
+    q("#pRems").textContent = (store().reminders || []).length;
+    q("#pDate").textContent = st.stats.first;
+    q("#pTone").textContent = toneTitle(st.settings.temperament || "friendly");
+  }
+
+  qa(".nav-btn").forEach((b) => {
+    b.onclick = () => {
+      qa(".nav-btn").forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      const v = b.dataset.v;
+      ["chat","bookmarks","reminders","settings","profile"].forEach((id) => {
+        q("#v-" + id).classList.toggle("hidden", id !== v);
+      });
+    };
+  });
+
+  function openPalette() {
+    const root = q("#paletteRoot");
+    root.className = "overlay";
+    root.innerHTML = `<div class="palette"><input id="cmdInput" placeholder="Команда..."><ul id="cmdList"></ul></div>`;
+    const items = [
+      ["chat","ИИ-чат"],["bookmarks","Закладки"],["reminders","Напоминания"],["settings","Настройки"],["profile","Профиль"]
+    ];
+    const fill = (f = "") => {
+      const ul = q("#cmdList");
+      ul.innerHTML = "";
+      items.filter((i) => i[1].toLowerCase().includes(f.toLowerCase())).forEach((i) => {
+        const li = document.createElement("li");
+        li.textContent = i[1];
+        li.onclick = () => {
+          root.className = "hidden";
+          q(`.nav-btn[data-v='${i[0]}']`).click();
+        };
+        ul.appendChild(li);
+      });
+    };
+    fill();
+    q("#cmdInput").oninput = (e) => fill(e.target.value);
+    q("#cmdInput").focus();
+    root.onclick = (e) => { if (e.target === root) { root.className = "hidden"; root.innerHTML = ""; } };
+  }
+
+  q("#openCmd").onclick = openPalette;
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      openPalette();
+    }
+  });
+
+  renderSessions();
+  renderMsgs();
+  sync();
+  renderProfile();
+})();
+</script>
+<script>
+(function () {
+  function q(s) { return document.querySelector(s); }
+  function qa(s) { return Array.prototype.slice.call(document.querySelectorAll(s)); }
+
+  function bindTabs() {
+    var ids = ["chat", "bookmarks", "reminders", "settings", "profile"];
+    qa(".nav-btn").forEach(function (btn) {
+      btn.onclick = function () {
+        qa(".nav-btn").forEach(function (x) { x.classList.remove("active"); });
+        btn.classList.add("active");
+        var v = btn.getAttribute("data-v");
+        ids.forEach(function (id) {
+          var el = q("#v-" + id);
+          if (el) el.classList.toggle("hidden", id !== v);
+        });
+      };
+    });
+  }
+
+  function bindChat() {
+    var input = q("#chatInput");
+    var send = q("#sendBtn");
+    var msgs = q("#msgs");
+    var typing = q("#typing");
+
+    function post(obj) {
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify(obj));
+        }
+      } catch (e) {}
+    }
+
+    function selectedTone() {
+      var t = q(".tone.on");
+      return t ? (t.getAttribute("data-tone") || "friendly") : "friendly";
+    }
+
+    qa(".tone").forEach(function (btn) {
+      btn.onclick = function () {
+        qa(".tone").forEach(function (x) { x.classList.remove("on"); });
+        btn.classList.add("on");
+      };
+    });
+
+    function appendMsg(role, text) {
+      if (!msgs) return;
+      var d = document.createElement("div");
+      d.className = "msg " + (role === "user" ? "user" : "assistant");
+      d.textContent = text || "";
+      msgs.appendChild(d);
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+
+    function sendNow() {
+      if (!input) return;
+      var t = (input.value || "").replace(/^\s+|\s+$/g, "");
+      if (!t) return;
+      input.value = "";
+      appendMsg("user", t);
+      post({ type: "chat", text: t, tone: selectedTone() });
+    }
+
+    if (send) send.onclick = sendNow;
+    if (input) {
+      input.onkeydown = function (e) {
+        e = e || window.event;
+        var key = e.key || e.keyCode;
+        if ((key === "Enter" || key === 13) && !e.shiftKey) {
+          if (e.preventDefault) e.preventDefault();
+          sendNow();
+          return false;
+        }
+      };
+    }
+
+    try {
+      if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
+        window.chrome.webview.addEventListener("message", function (ev) {
+          var data = ev && ev.data;
+          if (typeof data === "string") {
+            try { data = JSON.parse(data); } catch (e) { data = null; }
+          }
+          if (!data || typeof data !== "object") return;
+          if (data.type === "typing" && typing) {
+            typing.textContent = data.value ? "Q печатает..." : "";
+          }
+          if (data.type === "reply") {
+            if (typing) typing.textContent = "";
+            appendMsg("assistant", data.text || "");
+          }
+        });
+      }
+    } catch (e) {}
+  }
+
+  function bindDataTools() {
+    var storeCache = null;
+    function hostGet(cb) {
+      try {
+        if (storeCache) return cb(storeCache);
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: "storeGet" }));
+        }
+        // fallback if nothing comes back
+        setTimeout(function () { cb(storeCache || {}); }, 300);
+      } catch (e) { cb({}); }
+    }
+    function hostSet(obj) {
+      storeCache = obj;
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: "storeSet", value: obj }));
+        }
+      } catch (e) {}
+    }
+
+    // Listen for store replies (native file storage).
+    try {
+      if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
+        window.chrome.webview.addEventListener("message", function (ev) {
+          var data = ev && ev.data;
+          if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) { data = null; } }
+          if (!data || typeof data !== "object") return;
+          if (data.type === "store" && data.value && typeof data.value === "object") {
+            storeCache = data.value;
+          }
+        });
+      }
+    } catch (e) {}
+
+    function load() {
+      var st = storeCache || {};
+      if (!st.bookmarks || !Array.isArray(st.bookmarks)) st.bookmarks = [];
+      if (!st.reminders || !Array.isArray(st.reminders)) st.reminders = [];
+      if (!st.settings) st.settings = { temperament: "friendly", browser: "edge" };
+      return st;
+    }
+    function status(text) {
+      var b = q(".badge");
+      if (b) b.textContent = text;
+    }
+    function save(st) {
+      try {
+        hostSet(st);
+        return true;
+      } catch (e) {
+        status("save-error");
+        return false;
+      }
+    }
+    function counts() {
+      try {
+        st = load();
+        status("b:" + st.bookmarks.length + " r:" + st.reminders.length);
+      } catch (e) {
+        status("count-error");
+      }
+    }
+    var st = load();
+
+    function postSettings() {
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: "settings",
+            temperament: (st.settings && st.settings.temperament) ? st.settings.temperament : "friendly",
+            browser: (st.settings && st.settings.browser) ? st.settings.browser : "edge"
+          }));
+        }
+      } catch (e) {}
+    }
+
+    function renderBookmarks() {
+      st = load();
+      var box = q("#bookmarks");
+      if (!box) return;
+      box.innerHTML = "";
+      if (!st.bookmarks.length) {
+        var empty = document.createElement("div");
+        empty.className = "meta";
+        empty.textContent = "Пока нет закладок.";
+        box.appendChild(empty);
+        counts();
+        return;
+      }
+      st.bookmarks.forEach(function (m, i) {
+        var d = document.createElement("div");
+        d.className = "item";
+        d.innerHTML =
+            '<div class="title"></div>' +
+            '<textarea class="bm-body" style="width:100%;margin-top:8px;min-height:72px"></textarea>' +
+            '<div style="margin-top:8px;display:flex;gap:8px"><button class="btn bm-save">Сохранить</button><button class="btn danger bm-del">Удалить</button></div>';
+        d.querySelector(".title").textContent = m.title || "";
+        d.querySelector(".bm-body").value = m.body || "";
+        d.querySelector(".bm-save").onclick = function () {
+          st = load();
+          if (!st.bookmarks[i]) return;
+          st.bookmarks[i].body = d.querySelector(".bm-body").value || "";
+          if (save(st)) renderBookmarks();
+        };
+        d.querySelector(".bm-del").onclick = function () {
+          st.bookmarks.splice(i, 1);
+          if (save(st)) renderBookmarks();
+        };
+        box.appendChild(d);
+      });
+      counts();
+    }
+
+    function renderReminders() {
+      st = load();
+      var box = q("#reminders");
+      if (!box) return;
+      box.innerHTML = "";
+      if (!st.reminders.length) {
+        var empty = document.createElement("div");
+        empty.className = "meta";
+        empty.textContent = "Пока нет напоминаний.";
+        box.appendChild(empty);
+        counts();
+        return;
+      }
+      st.reminders.forEach(function (r, i) {
+        var d = document.createElement("div");
+        d.className = "item";
+        d.innerHTML = '<div class="title"></div><div class="meta"></div><div style="margin-top:8px"><button class="btn danger">Закрыть</button></div>';
+        d.querySelector(".title").textContent = r.text || "";
+        d.querySelector(".meta").textContent = r.when || "";
+        d.querySelector("button").onclick = function () {
+          st.reminders.splice(i, 1);
+          if (save(st)) renderReminders();
+        };
+        box.appendChild(d);
+      });
+      counts();
+    }
+
+    var addBm = q("#addBm");
+    var bmTitle = q("#bmTitle");
+    if (addBm && bmTitle) {
+      addBm.onclick = function () {
+        st = load();
+        var title = (bmTitle.value || "").replace(/^\s+|\s+$/g, "");
+        if (!title) return;
+        st.bookmarks.unshift({ title: title, body: "" });
+        bmTitle.value = "";
+        if (save(st)) renderBookmarks();
+        // Safety: force redraw on next tick (WebView2 sometimes batches DOM updates)
+        setTimeout(renderBookmarks, 0);
+      };
+    }
+
+    var addRem = q("#addRem");
+    var remText = q("#remText");
+    if (addRem && remText) {
+      addRem.onclick = function () {
+        st = load();
+        var text = (remText.value || "").replace(/^\s+|\s+$/g, "");
+        if (!text) return;
+        st.reminders.unshift({ text: text, when: new Date().toLocaleString("ru-RU") });
+        remText.value = "";
+        if (save(st)) renderReminders();
+        setTimeout(renderReminders, 0);
+      };
+    }
+
+    var setTemper = q("#setTemper");
+    var setBrowser = q("#setBrowser");
+    var saveSettings = q("#saveSettings");
+    if (setTemper) setTemper.value = st.settings.temperament || "friendly";
+    if (setBrowser) setBrowser.value = st.settings.browser || "edge";
+    if (saveSettings) {
+      saveSettings.onclick = function () {
+        st = load();
+        st.settings.temperament = setTemper ? (setTemper.value || "friendly") : "friendly";
+        st.settings.browser = setBrowser ? (setBrowser.value || "edge") : "edge";
+        save(st);
+        postSettings();
+      };
+    }
+
+    renderBookmarks();
+    renderReminders();
+    // Always sync settings to C++ on startup (so browser choice works even if user doesn't press save again).
+    postSettings();
+    counts();
+  }
+
+  try {
+    bindTabs();
+    bindChat();
+    bindDataTools();
+  } catch (e) {
+    var badge = q(".badge");
+    if (badge) badge.textContent = "ui-fallback";
+  }
+})();
+</script>
+</body>
+</html>
