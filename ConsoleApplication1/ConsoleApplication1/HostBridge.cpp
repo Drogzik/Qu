@@ -19,6 +19,19 @@
 
 static std::string g_preferredBrowserExe = "msedge.exe";
 static std::string g_preferredTemperament = "friendly";
+static bool g_learnPairsLoaded = false;
+static std::wstring g_learnPairsLoadedFromDir;
+static std::string g_lastUserQuestion;
+static bool g_profileLoaded = false;
+static std::wstring g_profileLoadedFromDir;
+static std::vector<std::string> g_behaviorRules;
+static std::string g_userTools;
+static std::string g_userLevel;
+static std::string g_userWorkSummary;
+static std::string g_lastAssistantReply;
+static bool g_waitingCorrection = false;
+static std::string g_pendingQuestion;
+static std::vector<std::string> g_styleSamples;
 
 static bool FileExistsA(const std::string& path) {
     if (path.empty())
@@ -309,6 +322,198 @@ static std::string ToLowerAscii(std::string s) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
     return s;
+}
+
+static std::filesystem::path LearnPairsPath(const std::wstring& userDataDir) {
+    return std::filesystem::path(userDataDir) / "learn_pairs.tsv";
+}
+
+static std::string TrimAscii(std::string s);
+
+static std::string OneLine(std::string s) {
+    for (char& c : s) {
+        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+    }
+    return TrimAscii(s);
+}
+
+static std::vector<std::pair<std::string, std::string>> LoadLearnPairsTsv(const std::filesystem::path& p) {
+    std::vector<std::pair<std::string, std::string>> out;
+    const std::string raw = ReadFileUtf8OrEmpty(p);
+    if (raw.empty()) return out;
+    size_t start = 0;
+    while (start < raw.size()) {
+        size_t end = raw.find('\n', start);
+        if (end == std::string::npos) end = raw.size();
+        std::string line = raw.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t tab = line.find('\t');
+        if (tab != std::string::npos) {
+            std::string q = TrimAscii(line.substr(0, tab));
+            std::string a = TrimAscii(line.substr(tab + 1));
+            if (!q.empty() && !a.empty()) out.emplace_back(q, a);
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+static bool AppendLearnPairTsv(const std::filesystem::path& p, const std::string& q, const std::string& a) {
+    std::error_code ec;
+    std::filesystem::create_directories(p.parent_path(), ec);
+    std::ofstream out(p, std::ios::binary | std::ios::app);
+    if (!out) return false;
+    out << OneLine(q) << '\t' << OneLine(a) << '\n';
+    return static_cast<bool>(out);
+}
+
+static std::filesystem::path AdaptiveProfilePath(const std::wstring& userDataDir) {
+    return std::filesystem::path(userDataDir) / "adaptive_profile.txt";
+}
+
+static std::string JoinLines(const std::vector<std::string>& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (!v[i].empty()) {
+            if (!out.empty()) out += "\n";
+            out += v[i];
+        }
+    }
+    return out;
+}
+
+static void LoadAdaptiveProfile(const std::filesystem::path& p) {
+    g_behaviorRules.clear();
+    g_userTools.clear();
+    g_userLevel.clear();
+    g_userWorkSummary.clear();
+    g_styleSamples.clear();
+    const std::string raw = ReadFileUtf8OrEmpty(p);
+    if (raw.empty()) return;
+    size_t start = 0;
+    while (start < raw.size()) {
+        size_t end = raw.find('\n', start);
+        if (end == std::string::npos) end = raw.size();
+        std::string line = raw.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("rule:", 0) == 0) g_behaviorRules.push_back(TrimAscii(line.substr(5)));
+        else if (line.rfind("tools:", 0) == 0) g_userTools = TrimAscii(line.substr(6));
+        else if (line.rfind("level:", 0) == 0) g_userLevel = TrimAscii(line.substr(6));
+        else if (line.rfind("work:", 0) == 0) g_userWorkSummary = TrimAscii(line.substr(5));
+        else if (line.rfind("sample:", 0) == 0) g_styleSamples.push_back(TrimAscii(line.substr(7)));
+        start = end + 1;
+    }
+}
+
+static void SaveAdaptiveProfile(const std::filesystem::path& p) {
+    std::string out;
+    for (const auto& r : g_behaviorRules) {
+        if (!r.empty()) out += "rule:" + OneLine(r) + "\n";
+    }
+    for (const auto& s : g_styleSamples) {
+        if (!s.empty()) out += "sample:" + OneLine(s) + "\n";
+    }
+    if (!g_userTools.empty()) out += "tools:" + OneLine(g_userTools) + "\n";
+    if (!g_userLevel.empty()) out += "level:" + OneLine(g_userLevel) + "\n";
+    if (!g_userWorkSummary.empty()) out += "work:" + OneLine(g_userWorkSummary) + "\n";
+    WriteFileUtf8(p, out);
+}
+
+static bool ContainsWord(const std::string& l, const char* w) {
+    return l.find(w) != std::string::npos;
+}
+
+static void AddBehaviorRule(const std::string& r) {
+    const std::string rule = OneLine(r);
+    if (rule.empty()) return;
+    for (const auto& e : g_behaviorRules) if (ToLowerAscii(e) == ToLowerAscii(rule)) return;
+    g_behaviorRules.push_back(rule);
+    if (g_behaviorRules.size() > 20) g_behaviorRules.erase(g_behaviorRules.begin());
+}
+
+static void UpdateAdaptiveProfileFromUserText(const std::string& userText) {
+    const std::string l = ToLowerAscii(userText);
+    // Любая правка/указание на стиль — в правила "навсегда".
+    if ((ContainsWord(l, "отвечай") || ContainsWord(l, "отвечай иначе") || ContainsWord(l, "пиши") || ContainsWord(l, "не пиши") ||
+         ContainsWord(l, "называй") || ContainsWord(l, "будь") || ContainsWord(l, "запомни")) &&
+        userText.size() <= 260) {
+        AddBehaviorRule(userText);
+    }
+
+    // Образцы манеры речи: сохраняем последние фразы пользователя (для “анализ стиля”).
+    {
+        const std::string s = OneLine(userText);
+        if (!s.empty() && s.size() <= 160) {
+            g_styleSamples.push_back(s);
+            if (g_styleSamples.size() > 8) g_styleSamples.erase(g_styleSamples.begin());
+        }
+    }
+
+    if (ContainsWord(l, "нович") || ContainsWord(l, "начинающ")) g_userLevel = "новичок";
+    else if (ContainsWord(l, "middle")) g_userLevel = "middle";
+    else if (ContainsWord(l, "senior")) g_userLevel = "senior";
+
+    const std::vector<std::string> tools = {"cursor", "vscode", "visual studio", "python", "c++", "cpp", "discord", "figma", "photoshop", "blender", "excel"};
+    std::string found;
+    for (const auto& t : tools) {
+        if (l.find(t) != std::string::npos) {
+            if (!found.empty()) found += ", ";
+            found += t;
+        }
+    }
+    if (!found.empty()) g_userTools = found;
+
+    if (ContainsWord(l, "работаю над") || ContainsWord(l, "делаю") || ContainsWord(l, "проект") || ContainsWord(l, "исправ")) {
+        g_userWorkSummary = OneLine(userText);
+    }
+}
+
+static std::string BuildAdaptiveContext() {
+    std::vector<std::string> parts;
+    if (!g_userLevel.empty()) parts.push_back("Уровень пользователя: " + g_userLevel + ".");
+    if (!g_userTools.empty()) parts.push_back("Часто используемые инструменты: " + g_userTools + ".");
+    if (!g_userWorkSummary.empty()) parts.push_back("Сейчас пользователь работает над: " + g_userWorkSummary + ".");
+    if (!g_behaviorRules.empty()) {
+        std::string r = "Персональные правила пользователя:";
+        for (const auto& x : g_behaviorRules) r += " " + x + ";";
+        parts.push_back(r);
+    }
+    if (!g_styleSamples.empty()) {
+        std::string s = "Примеры манеры речи пользователя (подстраивайся под сленг/юмор, отвечай естественно): ";
+        for (const auto& x : g_styleSamples) {
+            if (!x.empty()) {
+                s += "\"" + x + "\"; ";
+            }
+        }
+        parts.push_back(s);
+    }
+    return JoinLines(parts);
+}
+
+static bool LooksLikeNegativeFeedback(const std::string& lower) {
+    return lower.find("не так") != std::string::npos ||
+           lower.find("не то") != std::string::npos ||
+           lower.find("неправ") != std::string::npos ||
+           lower.find("хуйн") != std::string::npos ||
+           lower.find("плохой ответ") != std::string::npos ||
+           lower.find("отвечай иначе") != std::string::npos;
+}
+
+static bool LooksLikePositiveFeedback(const std::string& lower) {
+    return lower == "спасибо" || lower == "спс" || lower == "пасиб" ||
+           lower.find("идеально") != std::string::npos ||
+           lower.find("вот так") != std::string::npos ||
+           lower.find("красава") != std::string::npos ||
+           lower.find("норм") != std::string::npos;
+}
+
+static bool IsBadToLearnReply(const std::string& reply) {
+    if (reply.empty()) return true;
+    if (reply.find("COMMAND_") != std::string::npos) return true;
+    if (reply.find("Модель не найдена") != std::string::npos) return true;
+    if (reply.find("Я сейчас догружаюсь") != std::string::npos) return true;
+    if (reply.find("Внутренняя ошибка") != std::string::npos) return true;
+    return false;
 }
 
 static std::string UrlEncode(const std::string& s) {
@@ -628,6 +833,98 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
             const std::string& cmdSrc = text.empty() ? userText : text;
             const std::string cmdLower = ToLowerAscii(cmdSrc);
 
+            if (!g_learnPairsLoaded || g_learnPairsLoadedFromDir != userDataDir) {
+                ai.loadLearnedPairs(LoadLearnPairsTsv(LearnPairsPath(userDataDir)));
+                g_learnPairsLoaded = true;
+                g_learnPairsLoadedFromDir = userDataDir;
+            }
+            if (!g_profileLoaded || g_profileLoadedFromDir != userDataDir) {
+                LoadAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+                g_profileLoaded = true;
+                g_profileLoadedFromDir = userDataDir;
+            }
+
+            if (cmdLower.rfind("/learn", 0) == 0 || cmdLower.rfind("обучи", 0) == 0) {
+                std::string tail = TrimAscii(cmdSrc.substr(cmdSrc.find(' ') == std::string::npos ? cmdSrc.size() : cmdSrc.find(' ') + 1));
+                std::string q;
+                std::string a;
+                const size_t arrow = tail.find("=>");
+                if (arrow != std::string::npos) {
+                    q = TrimAscii(tail.substr(0, arrow));
+                    a = TrimAscii(tail.substr(arrow + 2));
+                }
+                if (q.empty()) {
+                    q = g_lastUserQuestion;
+                }
+                if (!q.empty() && !a.empty()) {
+                    ai.addLearnedPair(q, a);
+                    const bool ok = AppendLearnPairTsv(LearnPairsPath(userDataDir), q, a);
+                    AddBehaviorRule(std::string("На вопрос \"") + q + "\" отвечай примерно так: " + a);
+                    SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+                    ai.setAdaptiveContext(BuildAdaptiveContext());
+                    postW(MakeJsonTypingW(false));
+                    postW(MakeJsonReplyW(ok
+                                             ? "Запомнила. Теперь на такой вопрос буду отвечать так."
+                                             : "Запомнила в текущей сессии, но не смогла сохранить на диск."));
+                    return S_OK;
+                }
+                postW(MakeJsonTypingW(false));
+                postW(MakeJsonReplyW("Формат обучения: /learn вопрос => как нужно ответить"));
+                return S_OK;
+            }
+
+            // Явная команда "запомни/отвечай иначе/не пиши" — учим профиль сразу и не отдаём в модель.
+            if (cmdLower.rfind("запомни", 0) == 0 ||
+                cmdLower.rfind("отвечай", 0) == 0 ||
+                cmdLower.rfind("отвечай иначе", 0) == 0 ||
+                cmdLower.rfind("не пиши", 0) == 0 ||
+                cmdLower.rfind("будь", 0) == 0 ||
+                cmdLower.rfind("называй", 0) == 0) {
+                UpdateAdaptiveProfileFromUserText(cmdSrc);
+                SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+                ai.setAdaptiveContext(BuildAdaptiveContext());
+                postW(MakeJsonTypingW(false));
+                postW(MakeJsonReplyW("Запомнила."));
+                return S_OK;
+            }
+
+            // Полностью самостоятельное обучение в ходе разговора:
+            // 1) Ты пишешь "не так/не то/неправильно" → Q запоминает вопрос и ждёт правильный ответ.
+            // 2) Следующее твоё сообщение → считается идеальным ответом, сохраняется в learn_pairs.tsv.
+            if (g_waitingCorrection) {
+                const std::string a = TrimAscii(cmdSrc);
+                if (!g_pendingQuestion.empty() && !a.empty()) {
+                    ai.addLearnedPair(g_pendingQuestion, a);
+                    AppendLearnPairTsv(LearnPairsPath(userDataDir), g_pendingQuestion, a);
+                    AddBehaviorRule(std::string("На вопрос \"") + g_pendingQuestion + "\" отвечай примерно так: " + a);
+                    SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+                    ai.setAdaptiveContext(BuildAdaptiveContext());
+                    g_waitingCorrection = false;
+                    g_pendingQuestion.clear();
+                    postW(MakeJsonTypingW(false));
+                    postW(MakeJsonReplyW("Поняла. Запомнила — дальше буду отвечать так."));
+                    return S_OK;
+                }
+                g_waitingCorrection = false;
+                g_pendingQuestion.clear();
+            } else if (LooksLikeNegativeFeedback(cmdLower) && !g_lastUserQuestion.empty()) {
+                g_waitingCorrection = true;
+                g_pendingQuestion = g_lastUserQuestion;
+                postW(MakeJsonTypingW(false));
+                postW(MakeJsonReplyW("Окей. Напиши, как правильно ответить — и я запомню."));
+                return S_OK;
+            }
+
+            // Авто-подтверждение хороших ответов ("спасибо/идеально") → закрепляем последнее Q→A.
+            if (LooksLikePositiveFeedback(cmdLower) && !g_lastUserQuestion.empty() && !g_lastAssistantReply.empty() &&
+                !IsBadToLearnReply(g_lastAssistantReply)) {
+                ai.addLearnedPair(g_lastUserQuestion, g_lastAssistantReply);
+                AppendLearnPairTsv(LearnPairsPath(userDataDir), g_lastUserQuestion, g_lastAssistantReply);
+                SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+                ai.setAdaptiveContext(BuildAdaptiveContext());
+                // Ничего не блокируем — просто продолжаем обычный ответ ниже.
+            }
+
             const bool wantsOpen =
                 (cmdSrc.find("otkroi") != std::string::npos) ||
                 (cmdSrc.find("open") != std::string::npos) ||
@@ -693,6 +990,9 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
             const int wantsVideoIndex = ExtractVideoIndex(cmdSrc);
 
             postW(MakeJsonTypingW(true));
+            UpdateAdaptiveProfileFromUserText(cmdSrc);
+            SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+            ai.setAdaptiveContext(BuildAdaptiveContext());
 
             std::string replyUtf8;
             if (wantsOpen && mentionsNotepad) {
@@ -794,6 +1094,7 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
                     "\xd0\x97\xd0\xb0\xd0\xba\xd1\x80\xd1\x8b\xd0\xbb\xd0\xb0 "
                     "\xd0\xb1\xd0\xbb\xd0\xbe\xd0\xba\xd0\xbd\xd0\xbe\xd1\x82.";
             } else if (!text.empty()) {
+                g_lastUserQuestion = text;
                 replyUtf8 = ai.generateResponse(text, effectiveTone);
                 if (replyUtf8 == "COMMAND_OPEN_NOTEPAD") {
                     openApp("notepad.exe");
@@ -817,6 +1118,7 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
 
             postW(MakeJsonTypingW(false));
             postW(MakeJsonReplyW(replyUtf8));
+            g_lastAssistantReply = replyUtf8;
             return S_OK;
         }
     }
@@ -853,6 +1155,73 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
         (userText.find("аниме") != std::string::npos) ||
         (userText.find("Аниме") != std::string::npos);
     const std::string userLower = ToLowerAscii(userText);
+    if (!g_learnPairsLoaded || g_learnPairsLoadedFromDir != userDataDir) {
+        ai.loadLearnedPairs(LoadLearnPairsTsv(LearnPairsPath(userDataDir)));
+        g_learnPairsLoaded = true;
+        g_learnPairsLoadedFromDir = userDataDir;
+    }
+    if (!g_profileLoaded || g_profileLoadedFromDir != userDataDir) {
+        LoadAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+        g_profileLoaded = true;
+        g_profileLoadedFromDir = userDataDir;
+    }
+
+    // Авто-обучение в ходе разговора (без /learn):
+    // "не так/не то/неправильно" → ждём следующий текст как "как правильно".
+    if (g_waitingCorrection) {
+        const std::string a = TrimAscii(userText);
+        if (!g_pendingQuestion.empty() && !a.empty()) {
+            ai.addLearnedPair(g_pendingQuestion, a);
+            AppendLearnPairTsv(LearnPairsPath(userDataDir), g_pendingQuestion, a);
+            AddBehaviorRule(std::string("На вопрос \"") + g_pendingQuestion + "\" отвечай примерно так: " + a);
+            SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+            ai.setAdaptiveContext(BuildAdaptiveContext());
+            g_waitingCorrection = false;
+            g_pendingQuestion.clear();
+            postW(MakeJsonReplyW("Поняла. Запомнила — дальше буду отвечать так."));
+            return S_OK;
+        }
+        g_waitingCorrection = false;
+        g_pendingQuestion.clear();
+    } else if (LooksLikeNegativeFeedback(userLower) && !g_lastUserQuestion.empty()) {
+        g_waitingCorrection = true;
+        g_pendingQuestion = g_lastUserQuestion;
+        postW(MakeJsonReplyW("Окей. Напиши, как правильно ответить — и я запомню."));
+        return S_OK;
+    }
+
+    // Авто-закрепление хороших ответов.
+    if (LooksLikePositiveFeedback(userLower) && !g_lastUserQuestion.empty() && !g_lastAssistantReply.empty() &&
+        !IsBadToLearnReply(g_lastAssistantReply)) {
+        ai.addLearnedPair(g_lastUserQuestion, g_lastAssistantReply);
+        AppendLearnPairTsv(LearnPairsPath(userDataDir), g_lastUserQuestion, g_lastAssistantReply);
+        SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+        ai.setAdaptiveContext(BuildAdaptiveContext());
+    }
+
+    if (userLower.rfind("/learn", 0) == 0 || userLower.rfind("обучи", 0) == 0) {
+        std::string tail = TrimAscii(userText.substr(userText.find(' ') == std::string::npos ? userText.size() : userText.find(' ') + 1));
+        std::string q;
+        std::string a;
+        const size_t arrow = tail.find("=>");
+        if (arrow != std::string::npos) {
+            q = TrimAscii(tail.substr(0, arrow));
+            a = TrimAscii(tail.substr(arrow + 2));
+        }
+        if (q.empty()) q = g_lastUserQuestion;
+        if (!q.empty() && !a.empty()) {
+            ai.addLearnedPair(q, a);
+            AppendLearnPairTsv(LearnPairsPath(userDataDir), q, a);
+            AddBehaviorRule(std::string("На вопрос \"") + q + "\" отвечай примерно так: " + a);
+            SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+            ai.setAdaptiveContext(BuildAdaptiveContext());
+            postW(MakeJsonReplyW("Запомнила. Теперь на такой вопрос буду отвечать так."));
+            return S_OK;
+        }
+        postW(MakeJsonReplyW("Формат обучения: /learn вопрос => как нужно ответить"));
+        return S_OK;
+    }
+
     const bool mentionsYoutube = (userLower.find("youtube") != std::string::npos) ||
                                 (userText.find("YouTube") != std::string::npos) ||
                                 (userText.find("ютуб") != std::string::npos) ||
@@ -886,6 +1255,10 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
                                  (userLower.find("first video") != std::string::npos);
 
     postW(MakeJsonTypingW(true));
+
+    UpdateAdaptiveProfileFromUserText(userText);
+    SaveAdaptiveProfile(AdaptiveProfilePath(userDataDir));
+    ai.setAdaptiveContext(BuildAdaptiveContext());
 
     std::string replyUtf8;
     if (wantsOpen && mentionsNotepad) {
@@ -979,6 +1352,12 @@ HRESULT HandleHostWebMessage(ICoreWebView2* sender, ICoreWebView2WebMessageRecei
         replyUtf8 = "\xd0\x97\xd0\xb0\xd0\xba\xd1\x80\xd1\x8b\xd0\xbb\xd0\xb0 "
                      "\xd0\xb1\xd0\xbb\xd0\xbe\xd0\xba\xd0\xbd\xd0\xbe\xd1\x82.";
     } else {
+        if (!g_learnPairsLoaded || g_learnPairsLoadedFromDir != userDataDir) {
+            ai.loadLearnedPairs(LoadLearnPairsTsv(LearnPairsPath(userDataDir)));
+            g_learnPairsLoaded = true;
+            g_learnPairsLoadedFromDir = userDataDir;
+        }
+        g_lastUserQuestion = userText;
         replyUtf8 = ai.generateResponse(userText);
         if (replyUtf8 == "COMMAND_OPEN_NOTEPAD") {
             openApp("notepad.exe");

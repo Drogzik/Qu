@@ -49,7 +49,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    WizardForm.StatusLabel.Caption := 'Skachivanie modeli II (~700 MB, nuzhen internet)...';
+    WizardForm.StatusLabel.Caption := 'Skachivanie modeli II (~2 GB, nuzhen internet)...';
     WizardForm.Update;
     PsLine := ExpandConstant('-NoProfile -ExecutionPolicy Bypass -File "{app}\download_model.ps1" "{app}"');
     if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), PsLine, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then

@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <shellapi.h>
 
 #include <cerrno>
@@ -166,18 +166,17 @@ static void TryRunBundledModelDownloader(const std::filesystem::path& exeDir) {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_SHOWNORMAL;
+    si.wShowWindow = SW_HIDE;
 
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> buf(cmdLine.begin(), cmdLine.end());
     buf.push_back(L'\0');
 
     const std::wstring workDir = exeDir.wstring();
-    if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, 0, nullptr,
+    if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
                         workDir.c_str(), &si, &pi)) {
         return;
     }
-    WaitForSingleObject(pi.hProcess, INFINITE);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 }
@@ -296,10 +295,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const DWORD mtxErr = GetLastError();
         if (mtxErr == ERROR_ALREADY_EXISTS) {
             PomoshnikActivateRunningInstance();
-            MessageBoxW(nullptr,
-                        L"\u041f\u043e\u043c\u043e\u0448\u043d\u0438\u043a \u0443\u0436\u0435 \u0437\u0430\u043f\u0443\u0449\u0435\u043d. \u0421\u0443\u0449\u0435\u0441\u0442\u0432\u0443\u044e\u0449\u0435\u0435 \u043e\u043a\u043d\u043e \u0432\u044b\u0432\u0435\u0434\u0435\u043d\u043e \u043d\u0430 \u043f\u0435\u0440\u0435\u0434\u043d\u0438\u0439 \u043f\u043b\u0430\u043d.",
-                        L"\u041f\u043e\u043c\u043e\u0448\u043d\u0438\u043a",
-                        MB_OK | MB_ICONINFORMATION);
             CloseHandle(hSingleInstanceMutex);
             hSingleInstanceMutex = nullptr;
             return 0;

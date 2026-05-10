@@ -33,6 +33,9 @@ public:
     // Restores user/assistant turns into server-side history (e.g. when switching a saved thread).
     // Pairs must alternate user/assistant; invalid entries are skipped.
     void loadHistoryTurns(const std::vector<std::pair<std::string, std::string>>& turns);
+    void loadLearnedPairs(const std::vector<std::pair<std::string, std::string>>& pairs);
+    void addLearnedPair(const std::string& userQuestion, const std::string& idealAnswer);
+    void setAdaptiveContext(const std::string& context);
 
 private:
     enum class BgLoadState { NotStarted, Running, Finished };
@@ -46,6 +49,8 @@ private:
     std::vector<int> tokenize(const std::string& text, bool addSpecial) const;
     std::string tokenToPiece(int token) const;
     bool isCommandInput(const std::string& input) const;
+    bool tryGetLearnedReply(const std::string& input, std::string& outReply) const;
+    static std::string normalizeLearnText(const std::string& s);
 
     mutable std::mutex m_loadMutex;
     std::condition_variable m_loadCv;
@@ -61,4 +66,8 @@ private:
     llama_sampler* m_sampler = nullptr;
     const llama_vocab* m_vocab = nullptr;
     std::vector<std::pair<std::string, std::string>> m_history;
+    mutable std::mutex m_learnMutex;
+    std::vector<std::pair<std::string, std::string>> m_learnedPairs;
+    mutable std::mutex m_adaptiveMutex;
+    std::string m_adaptiveContext;
 };
